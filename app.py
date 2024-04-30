@@ -1,87 +1,79 @@
-from __future__ import annotations
-from threading import Thread, Lock
-from serial import Serial, SerialException
-from serial.tools.list_ports import comports
-
 import tkinter as tk
 import tkinter.ttk as ttk
 from tkinter.messagebox import showerror
 
+from serial import Serial, SerialException
+from serial.tools.list_ports import comports
+
 S_OK: int = 0xaa
 S_ERR: int = 0xff
 
-def detached_callback(f):
-    return lambda *args, **kwargs: Thread(target=f, args=args, kwargs=kwargs).start()
+from threading import Thread, Lock # we'll use Lock later ;)
 
 class LockedSerial(Serial):
     _lock: Lock = Lock()
-    
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        
-    def read(self, size=1) -> bytes:
+
+    def read(self, size=1):
         with self._lock:
             return super().read(size)
-        
-    def write(self, b: bytes, /) -> int | None:
+
+    def write(self, b: bytes, /):
         with self._lock:
             super().write(b)
-            
+
     def close(self):
         with self._lock:
             super().close()
 
-class SerialPortal(tk.Toplevel):
-    def __init__(self, parent: App):
-        super().__init__(parent)
-        
-        self.parent = parent
-        self.parent.withdraw()
-        
-        ttk.OptionMenu(self, parent.port, '', *[d.device for d in comports()]).pack()
-        ttk.Button(self, text='Connect', command=self.connect, default='active').pack()
-        
-    @detached_callback
-    def connect(self):
-        self.parent.connect()
-        self.destroy()
-        self.parent.deiconify()
+def detached_callback(f):
+    return lambda *args, **kwargs: Thread(target=f, args=args, kwargs=kwargs).start()
 
 class App(tk.Tk):
     ser: LockedSerial
-    
+
     def __init__(self):
         super().__init__()
-        
+
         self.title("LED Blinker")
-        
-        self.port = tk.StringVar()
+
+        self.port = tk.StringVar() # add this
         self.led = tk.BooleanVar()
-        
+
         ttk.Checkbutton(self, text='Toggle LED', variable=self.led, command=self.update_led).pack()
         ttk.Button(self, text='Send Invalid', command=self.send_invalid).pack()
         ttk.Button(self, text='Disconnect', command=self.disconnect, default='active').pack()
+
+        SerialPortal(self) # and this
         
-        SerialPortal(self)
-        
+    def __enter__(self):
+        return self
+    
+    def __exit__(self, *_):
+        self.disconnect()
+
+    # and finally this
     @detached_callback
     def connect(self):
         self.ser = LockedSerial(self.port.get())
-    
-    @detached_callback
-    def disconnect(self):
-        self.ser.close()
-            
-        SerialPortal(self)
-            
+
     @detached_callback
     def update_led(self):
         self.write(bytes([self.led.get()]))
-                
+     
+    @detached_callback    
+    def disconnect(self):
+        self.ser.close()
+    
+        SerialPortal(self) # display portal to reconnect
+
     @detached_callback
     def send_invalid(self):
         self.write(bytes([0x10]))
-        
+
+    @detached_callback
     def write(self, b: bytes):
         try:
             self.ser.write(b)
@@ -89,13 +81,24 @@ class App(tk.Tk):
                 showerror('Device Error', 'The device reported an invalid command.')
         except SerialException:
             showerror('Serial Error', 'Write failed.')
+
         
-    def __enter__(self):
-        return self
-    
-    def __exit__(self, *_):
-        self.disconnect()
-        
+class SerialPortal(tk.Toplevel):
+    def __init__(self, parent: App):
+        super().__init__(parent)
+
+        self.parent = parent
+        self.parent.withdraw() # hide App until connected
+
+        ttk.OptionMenu(self, parent.port, '', *[d.device for d in comports()]).pack()
+        ttk.Button(self, text='Connect', command=self.connect, default='active').pack()
+
+    def connect(self):
+        self.parent.connect()
+        self.destroy()
+        self.parent.deiconify() # reveal App
+
 if __name__ == '__main__':
     with App() as app:
         app.mainloop()
+        
